@@ -1,0 +1,82 @@
+@page "/login"
+@layout WEB_NAA.Components.Layout.LoginLayout
+@inject UserSession UserSession
+@inject NavigationManager Navigation
+
+<PageTitle>登入｜小護天使</PageTitle>
+
+<div class="login-page">
+    <div class="login-card">
+        <div class="login-brand">
+            <div class="brand-logo">✚</div>
+            <div>
+                <h1>小護天使</h1>
+                <span>Nursing AI Assistant</span>
+            </div>
+        </div>
+
+        <div class="login-content">
+            <div class="eyebrow">WELCOME</div>
+            <h2>歡迎使用小護天使</h2>
+            <p>請輸入您的員工帳號，以載入個人對話紀錄。</p>
+
+            <div class="form-group">
+                <label for="account">員工帳號</label>
+                <input id="account"
+                       type="text"
+                       autocomplete="username"
+                       @bind="account"
+                       @bind:event="oninput"
+                       @onkeydown="HandleKeyDown"
+                       placeholder="例如：N001" />
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(errorMessage))
+            {
+                <div class="error-message">@errorMessage</div>
+            }
+
+            <button class="login-button" @onclick="SubmitLogin">進入系統</button>
+
+            <div class="login-note">
+                此版本以員工帳號識別使用者，主要用於載入與保存個人歷史紀錄。
+            </div>
+        </div>
+
+        <div class="login-footer">NAA · Nursing AI Assistant</div>
+    </div>
+</div>
+
+@code {
+    private string account = string.Empty;
+    private string errorMessage = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        if (UserSession.IsLoggedIn)
+        {
+            Navigation.NavigateTo("/", replace: true);
+        }
+    }
+
+    private void SubmitLogin()
+    {
+        if (string.IsNullOrWhiteSpace(account))
+        {
+            errorMessage = "請輸入員工帳號";
+            return;
+        }
+
+        errorMessage = string.Empty;
+        UserSession.Login(account);
+        Navigation.NavigateTo("/", replace: true);
+    }
+
+    private void HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            SubmitLogin();
+        }
+    }
+}

@@ -1,0 +1,6 @@
+@API_NAA_HostAddress = http://localhost:5255
+
+GET {{API_NAA_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

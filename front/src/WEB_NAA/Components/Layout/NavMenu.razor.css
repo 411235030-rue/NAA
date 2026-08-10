@@ -1,0 +1,240 @@
+.sidebar-container {
+    height: 100%;
+    padding: 26px 20px 20px;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 8px;
+    margin-bottom: 28px;
+}
+
+.brand-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+    background: #dff4ef;
+    color: #0f766e;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 23px;
+    font-weight: 700;
+}
+
+.brand-name {
+    font-size: 20px;
+    font-weight: 800;
+    color: #173b35;
+    letter-spacing: .02em;
+}
+
+.brand-subtitle {
+    font-size: 11px;
+    color: #95a39f;
+    margin-top: 2px;
+}
+
+.new-chat {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 13px 16px;
+    border: 0;
+    border-radius: 12px;
+    background: #0f766e;
+    color: #ffffff;
+    font-weight: 700;
+    font-size: 14px;
+    margin-bottom: 28px;
+    transition: .18s ease;
+    box-shadow: 0 8px 20px rgba(15, 118, 110, .13);
+    cursor: pointer;
+}
+
+.new-chat:hover {
+    background: #0b665f;
+    transform: translateY(-1px);
+}
+
+.plus {
+    font-size: 20px;
+    line-height: 1;
+}
+
+.section-title {
+    padding: 0 8px;
+    margin-bottom: 10px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #8e9e99;
+}
+
+.history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    overflow-y: auto;
+    max-height: calc(100vh - 330px);
+    padding: 2px 3px 8px;
+}
+
+.history-item {
+    width: 100%;
+    border: 1px solid transparent;
+    background: transparent;
+    border-radius: 11px;
+    padding: 10px 11px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    text-align: left;
+    cursor: pointer;
+    transition: .16s ease;
+    color: #40544e;
+}
+
+.history-item:hover {
+    background: #f2f8f6;
+    border-color: #e2ece9;
+}
+
+.history-item.selected {
+    background: #eaf5f2;
+    border-color: #cfe4de;
+}
+
+.history-title {
+    width: 100%;
+    font-size: 13px;
+    font-weight: 700;
+    color: #314a44;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.history-preview {
+    width: 100%;
+    font-size: 11px;
+    color: #899a95;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.history-item small {
+    font-size: 10px;
+    color: #a3afac;
+    margin-top: 1px;
+}
+
+.history-empty {
+    border: 1px dashed #dbe7e3;
+    border-radius: 14px;
+    padding: 18px 15px;
+    margin: 0 4px;
+    background: #fbfdfc;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    color: #6f817c;
+}
+
+.history-error {
+    border-color: #efd6d0;
+    background: #fffaf8;
+}
+
+.history-empty-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #eef7f4;
+    color: #0f766e;
+    margin-bottom: 4px;
+}
+
+.history-error .history-empty-icon {
+    background: #fbeeea;
+    color: #b8624f;
+}
+
+.history-empty strong {
+    font-size: 13px;
+    color: #40544e;
+}
+
+.history-empty span {
+    font-size: 11px;
+    line-height: 1.6;
+    color: #98a7a3;
+    word-break: break-word;
+}
+
+.history-status {
+    margin: 4px 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #8e9e99;
+    font-size: 11px;
+}
+
+.history-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid #d9e8e4;
+    border-top-color: #0f766e;
+    border-radius: 50%;
+    animation: history-spin .8s linear infinite;
+}
+
+@keyframes history-spin {
+    to { transform: rotate(360deg); }
+}
+
+.sidebar-bottom {
+    margin-top: auto;
+    border-top: 1px solid #edf2f0;
+    padding-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.bottom-item {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 10px 11px;
+    border-radius: 10px;
+    color: #687a75;
+    font-size: 13px;
+    cursor: pointer;
+    text-align: left;
+}
+
+.bottom-item:hover {
+    background: #f2f7f5;
+    color: #17473f;
+}
+
+.bottom-icon {
+    width: 20px;
+    text-align: center;
+}
