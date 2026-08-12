@@ -1,0 +1,11 @@
+include:
+  # image 版本號 yaml記錄檔
+  - image_version_tag.yaml
+  - project: "devopsteam/ci-templates"
+    ref: main
+    file: "include.gitlab-ci.yml"
+
+variables:
+  SOURCE_PATH: "src/API_NAA"
+  DOTNET_SDK_VERSION_TAG: "dotnet8"
+  CI_PIPELINE_TYPE: "" # 固定為空
