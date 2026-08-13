@@ -1,4 +1,5 @@
-import { lazy, Suspense, useLayoutEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useState } from "react";
+import { authenticateUser, getSessionAccount, logoutUser } from "./api/ddm";
 import type { AppTheme } from "./components/AnimatedThemeToggler";
 import { NaaIcon } from "./components/NaaIcon";
 
@@ -9,16 +10,7 @@ const LoginPage = lazy(() =>
   import("./components/LoginPage").then((module) => ({ default: module.LoginPage })),
 );
 
-const ACCOUNT_KEY = "naa.account";
 const THEME_KEY = "naa.theme";
-
-function readSessionAccount(): string {
-  try {
-    return window.sessionStorage.getItem(ACCOUNT_KEY)?.trim() || "";
-  } catch {
-    return "";
-  }
-}
 
 function readTheme(): AppTheme {
   try {
@@ -31,8 +23,23 @@ function readTheme(): AppTheme {
 }
 
 export default function App() {
-  const [account, setAccount] = useState(readSessionAccount);
+  const [account, setAccount] = useState("");
+  const [isSessionLoading, setIsSessionLoading] = useState(true);
   const [theme, setTheme] = useState<AppTheme>(readTheme);
+
+  useEffect(() => {
+    let active = true;
+    void getSessionAccount()
+      .then((sessionAccount) => {
+        if (active) setAccount(sessionAccount || "");
+      })
+      .finally(() => {
+        if (active) setIsSessionLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useLayoutEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -44,14 +51,14 @@ export default function App() {
     }
   }, [theme]);
 
-  function login(value: string) {
-    window.sessionStorage.setItem(ACCOUNT_KEY, value);
-    setAccount(value);
+  async function login(value: string, password: string) {
+    const authenticatedAccount = await authenticateUser(value, password);
+    setAccount(authenticatedAccount);
   }
 
   function logout() {
-    window.sessionStorage.removeItem(ACCOUNT_KEY);
     setAccount("");
+    void logoutUser();
   }
 
   return (
@@ -63,7 +70,12 @@ export default function App() {
         </div>
       }
     >
-      {account ? (
+      {isSessionLoading ? (
+        <div className="app-loading" role="status">
+          <NaaIcon size={58} aria-hidden="true" />
+          <p>正在確認登入狀態…</p>
+        </div>
+      ) : account ? (
         <ChatPage
           account={account}
           theme={theme}

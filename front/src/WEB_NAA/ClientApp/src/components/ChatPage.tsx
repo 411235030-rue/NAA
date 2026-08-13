@@ -15,12 +15,20 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
+  RotateCcw,
   Settings,
+  Trash2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getHistoryByAccount, reviseText } from "../api/ddm";
-import type { ChatMessage, HistoryRecord } from "../types";
+import {
+  getConversationById,
+  getConversationSummaries,
+  restoreConversation,
+  reviseText,
+  softDeleteConversation,
+} from "../api/ddm";
+import type { ChatMessage, ConversationSummary, HistoryTurn } from "../types";
 import {
   AnimatedThemeToggler,
   type AppTheme,
@@ -41,6 +49,11 @@ function createId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function createConversationId(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 20)}`.slice(0, 36);
+}
+
 function readAppendText(message: AppendMessage): string {
   return message.content
     .filter((part): part is Extract<(typeof message.content)[number], { type: "text" }> => part.type === "text")
@@ -49,12 +62,12 @@ function readAppendText(message: AppendMessage): string {
     .trim();
 }
 
-function historyMessages(record: HistoryRecord): ChatMessage[] {
+function historyMessages(turns: HistoryTurn[]): ChatMessage[] {
   const result: ChatMessage[] = [];
-  record.turns.forEach((turn, index) => {
+  turns.forEach((turn, index) => {
     if (turn.questionText.trim()) {
       result.push({
-        id: turn.uniqueId ? `${turn.uniqueId}-q` : `${record.uniqueId}-${index}-q`,
+        id: `${turn.uniqueId || `${turn.conversationId}-${index}`}-q`,
         role: "user",
         text: turn.questionText,
         createdAt: turn.createdAt || new Date(),
@@ -62,10 +75,11 @@ function historyMessages(record: HistoryRecord): ChatMessage[] {
     }
     if (turn.answerText.trim()) {
       result.push({
-        id: turn.uniqueId ? `${turn.uniqueId}-a` : `${record.uniqueId}-${index}-a`,
+        id: `${turn.uniqueId || `${turn.conversationId}-${index}`}-a`,
         role: "assistant",
         text: turn.answerText,
         createdAt: turn.createdAt || new Date(),
+        tone: turn.answerText.startsWith("系統暫時無法取得回答") ? "error" : "default",
       });
     }
   });
@@ -86,9 +100,12 @@ function formatHistoryTime(date?: Date): string {
 
 export function ChatPage({ account, theme, onThemeChange, onLogout }: ChatPageProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [history, setHistory] = useState<HistoryRecord[]>([]);
-  const [selectedHistoryId, setSelectedHistoryId] = useState<string>();
-  const [threadId, setThreadId] = useState(() => createId("thread"));
+  const [history, setHistory] = useState<ConversationSummary[]>([]);
+  const [deletedHistory, setDeletedHistory] = useState<ConversationSummary[]>([]);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [selectedConversationId, setSelectedConversationId] = useState<string>();
+  const [selectedConversationIsDeleted, setSelectedConversationIsDeleted] = useState(false);
+  const [conversationId, setConversationId] = useState(createConversationId);
   const [isRunning, setIsRunning] = useState(false);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState("");
@@ -107,7 +124,12 @@ export function ChatPage({ account, theme, onThemeChange, onLogout }: ChatPagePr
     setIsHistoryLoading(true);
     setHistoryError("");
     try {
-      setHistory(await getHistoryByAccount(account));
+      const [active, deleted] = await Promise.all([
+        getConversationSummaries(account, false),
+        getConversationSummaries(account, true),
+      ]);
+      setHistory(active);
+      setDeletedHistory(deleted);
     } catch (error) {
       setHistoryError(error instanceof Error ? error.message : "暫時無法載入歷史紀錄。");
     } finally {
@@ -139,24 +161,61 @@ export function ChatPage({ account, theme, onThemeChange, onLogout }: ChatPagePr
 
   const startNewChat = useCallback(() => {
     setMessages([]);
-    setSelectedHistoryId(undefined);
-    setThreadId(createId("thread"));
+    setSelectedConversationId(undefined);
+    setSelectedConversationIsDeleted(false);
+    setConversationId(createConversationId());
     setSidebarOpen(false);
     closeAccountMenu();
   }, [closeAccountMenu]);
 
-  const openHistory = useCallback((item: HistoryRecord) => {
-    setMessages(historyMessages(item));
-    setSelectedHistoryId(item.uniqueId);
-    setThreadId(item.threadId || item.uniqueId);
-    setSidebarOpen(false);
-    closeAccountMenu();
-  }, [closeAccountMenu]);
+  const openHistory = useCallback(async (item: ConversationSummary) => {
+    setHistoryError("");
+    try {
+      const turns = await getConversationById(account, item.conversationId, item.isDeleted);
+      setMessages(historyMessages(turns));
+      setSelectedConversationId(item.conversationId);
+      setSelectedConversationIsDeleted(item.isDeleted);
+      setConversationId(item.conversationId);
+      setSidebarOpen(false);
+      closeAccountMenu();
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : "無法載入完整對話。");
+    }
+  }, [account, closeAccountMenu]);
+
+  const changeDeletedState = useCallback(async (item: ConversationSummary) => {
+    setHistoryError("");
+    try {
+      if (item.isDeleted) {
+        await restoreConversation(account, item.conversationId);
+      } else {
+        await softDeleteConversation(account, item.conversationId);
+        if (selectedConversationId === item.conversationId) startNewChat();
+      }
+      await refreshHistory();
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : "無法更新對話狀態。");
+    }
+  }, [account, refreshHistory, selectedConversationId, startNewChat]);
 
   const onNew = useCallback(
     async (incoming: AppendMessage) => {
       const text = readAppendText(incoming);
       if (!text || isRunning) return;
+
+      if (selectedConversationIsDeleted) {
+        setMessages((current) => [
+          ...current,
+          {
+            id: createId("error"),
+            role: "assistant",
+            text: "這個對話已刪除，請先從「已刪除」列表恢復後再繼續。",
+            createdAt: new Date(),
+            tone: "error",
+          },
+        ]);
+        return;
+      }
 
       const userMessage: ChatMessage = {
         id: createId("user"),
@@ -166,18 +225,17 @@ export function ChatPage({ account, theme, onThemeChange, onLogout }: ChatPagePr
       };
 
       setMessages((current) => [...current, userMessage]);
-      setSelectedHistoryId(undefined);
+      setSelectedConversationId(conversationId);
       setIsRunning(true);
 
       try {
         const response = await reviseText({
-          threadId,
-          chatTitle: "小護天使",
+          conversationId,
+          chatTitle: text,
           inputText: text,
           account,
           employeeId: account,
           originCode: "DDM",
-          agentCode: "Local",
         });
 
         setMessages((current) => [
@@ -204,11 +262,12 @@ export function ChatPage({ account, theme, onThemeChange, onLogout }: ChatPagePr
             tone: "error",
           },
         ]);
+        await refreshHistory();
       } finally {
         setIsRunning(false);
       }
     },
-    [account, isRunning, refreshHistory, threadId],
+    [account, conversationId, isRunning, refreshHistory, selectedConversationIsDeleted],
   );
 
   const convertMessage = useCallback(
@@ -231,6 +290,7 @@ export function ChatPage({ account, theme, onThemeChange, onLogout }: ChatPagePr
   });
 
   const initial = useMemo(() => account.trim().charAt(0).toUpperCase() || "護", [account]);
+  const displayedHistory = showDeleted ? deletedHistory : history;
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -267,16 +327,26 @@ export function ChatPage({ account, theme, onThemeChange, onLogout }: ChatPagePr
 
           <div className="sidebar__history">
             <div className="history-heading">
-              <span>最近對話</span>
-              <button
-                type="button"
-                className="micro-button micro-button--rotate"
-                onClick={() => void refreshHistory()}
-                disabled={isHistoryLoading}
-                aria-label="重新整理歷史紀錄"
-              >
-                <RefreshCw className={isHistoryLoading ? "is-spinning" : ""} size={15} />
-              </button>
+              <span>{showDeleted ? "已刪除對話" : "最近對話"}</span>
+              <div className="history-heading__actions">
+                <button
+                  type="button"
+                  className="history-heading__toggle micro-button"
+                  onClick={() => setShowDeleted((current) => !current)}
+                  aria-label={showDeleted ? "顯示最近對話" : "顯示已刪除對話"}
+                >
+                  {showDeleted ? "最近" : "已刪除"}
+                </button>
+                <button
+                  type="button"
+                  className="micro-button micro-button--rotate"
+                  onClick={() => void refreshHistory()}
+                  disabled={isHistoryLoading}
+                  aria-label="重新整理歷史紀錄"
+                >
+                  <RefreshCw className={isHistoryLoading ? "is-spinning" : ""} size={15} />
+                </button>
+              </div>
             </div>
 
             <div className="history-panel">
@@ -290,26 +360,36 @@ export function ChatPage({ account, theme, onThemeChange, onLogout }: ChatPagePr
                   <strong>暫時無法載入</strong>
                   <span>{historyError}</span>
                 </div>
-              ) : history.length === 0 ? (
+              ) : displayedHistory.length === 0 ? (
                 <div className="history-state">
                   <NaaIcon size={30} />
-                  <strong>尚無對話紀錄</strong>
-                  <span>完成一組問答後，紀錄會顯示在這裡。</span>
+                  <strong>{showDeleted ? "沒有已刪除對話" : "尚無對話紀錄"}</strong>
+                  <span>{showDeleted ? "刪除的對話會顯示在這裡。" : "完成一組問答後，紀錄會顯示在這裡。"}</span>
                 </div>
               ) : (
                 <div className="history-list">
-                  {history.slice(0, 20).map((item) => (
-                    <button
-                      key={item.uniqueId}
-                      type="button"
-                      className={`micro-button ${selectedHistoryId === item.uniqueId ? "is-selected" : ""}`}
-                      onClick={() => openHistory(item)}
-                      title={item.questionText}
-                    >
-                      <strong>{item.chatTitle}</strong>
-                      <span>{item.questionText || "已保存的對話"}</span>
-                      <small>{formatHistoryTime(item.createdAt)}</small>
-                    </button>
+                  {displayedHistory.slice(0, 20).map((item) => (
+                    <div className="history-list__item" key={item.conversationId}>
+                      <button
+                        type="button"
+                        className={`history-list__open micro-button ${selectedConversationId === item.conversationId ? "is-selected" : ""}`}
+                        onClick={() => void openHistory(item)}
+                        title={item.lastQuestionText}
+                      >
+                        <strong>{item.chatTitle}</strong>
+                        <span>{item.lastQuestionText || "已保存的對話"}</span>
+                        <small>{formatHistoryTime(item.lastMessageAt)}</small>
+                      </button>
+                      <button
+                        type="button"
+                        className="history-list__action micro-button"
+                        onClick={() => void changeDeletedState(item)}
+                        aria-label={item.isDeleted ? "恢復對話" : "刪除對話"}
+                        title={item.isDeleted ? "恢復對話" : "移到已刪除"}
+                      >
+                        {item.isDeleted ? <RotateCcw size={15} /> : <Trash2 size={15} />}
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}

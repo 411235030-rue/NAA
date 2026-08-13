@@ -1,5 +1,5 @@
 import type {
-  HistoryRecord,
+  ConversationSummary,
   HistoryTurn,
   ReviseRequest,
   ReviseResult,
@@ -27,20 +27,69 @@ function readText(source: JsonObject, ...names: string[]): string | undefined {
   return undefined;
 }
 
-function readDate(source: JsonObject): Date | undefined {
-  const value = readText(
-    source,
-    "createdAt",
-    "createTime",
-    "createdTime",
-    "createDate",
-    "createdDate",
-    "insertTime",
-    "insertDt",
-  );
+function readBoolean(source: JsonObject, ...names: string[]): boolean {
+  const value = readValue(source, names);
+  return value === true || value === 1 || value === "true";
+}
+
+function readNumber(source: JsonObject, ...names: string[]): number {
+  const value = readValue(source, names);
+  return typeof value === "number" ? value : Number(value) || 0;
+}
+
+function readDate(source: JsonObject, ...names: string[]): Date | undefined {
+  const value = readText(source, ...names);
   if (!value) return undefined;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
+function readProblemDetail(body: unknown): string | undefined {
+  if (typeof body === "string") return body.trim() || undefined;
+  if (!isObject(body)) return undefined;
+  return readText(body, "detail", "description", "message", "title");
+}
+
+async function readResponseBody(response: Response): Promise<unknown> {
+  const raw = await response.text();
+  if (!raw) return undefined;
+
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
+}
+
+export async function authenticateUser(account: string, password: string): Promise<string> {
+  const response = await fetch("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ account, password }),
+  });
+  const body = await readResponseBody(response);
+
+  if (!response.ok) {
+    throw new Error(readProblemDetail(body) || "帳號或密碼錯誤。");
+  }
+
+  if (!isObject(body)) throw new Error("登入服務回傳格式錯誤。");
+  const authenticatedAccount = readText(body, "account")?.trim();
+  if (!authenticatedAccount) throw new Error("登入服務沒有回傳帳號。");
+  return authenticatedAccount;
+}
+
+export async function getSessionAccount(): Promise<string | null> {
+  const response = await fetch("/auth/session", { cache: "no-store" });
+  if (response.status === 401) return null;
+
+  const body = await readResponseBody(response);
+  if (!response.ok || !isObject(body)) return null;
+  return readText(body, "account")?.trim() || null;
+}
+
+export async function logoutUser(): Promise<void> {
+  await fetch("/auth/logout", { method: "POST" });
 }
 
 async function postJson(path: string, payload: unknown): Promise<{ body: unknown; status: number }> {
@@ -54,29 +103,20 @@ async function postJson(path: string, payload: unknown): Promise<{ body: unknown
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
-    const raw = await response.text();
-    let body: unknown = raw;
-
-    if (raw) {
-      try {
-        body = JSON.parse(raw) as unknown;
-      } catch {
-        body = raw;
-      }
-    }
+    const body = await readResponseBody(response);
 
     if (!response.ok) {
-      const detail = typeof body === "string" ? body : JSON.stringify(body);
-      throw new Error(`DDM 回傳 HTTP ${response.status}${detail ? `：${detail}` : ""}`);
+      const detail = readProblemDetail(body);
+      throw new Error(`DDM 回應 HTTP ${response.status}${detail ? `：${detail}` : ""}`);
     }
 
     return { body, status: response.status };
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error("DDM 回應逾時，請確認服務是否已啟動。");
+      throw new Error("DDM 回應逾時，請確認服務是否正常執行。");
     }
     if (error instanceof TypeError) {
-      throw new Error("無法連線至 DDM，請確認 7079 服務是否已啟動。");
+      throw new Error("無法連線到 DDM，請確認 7079 連接埠是否正常執行。");
     }
     throw error;
   } finally {
@@ -111,82 +151,59 @@ function findAnswer(value: unknown): string | null {
   return null;
 }
 
-function collectHistory(value: unknown, target: HistoryTurnSource[]): void {
-  if (Array.isArray(value)) {
-    value.forEach((item) => collectHistory(item, target));
-    return;
-  }
-  if (!isObject(value)) return;
-
-  const questionText = readText(value, "questionText", "question", "inputText", "content");
-  const answerText = readText(value, "answerText", "answer", "responseText", "revisedText", "response");
-
-  if (questionText || answerText) {
-    target.push({
-      uniqueId: readText(value, "uniqueId", "historyId", "id", "uuid"),
-      threadId: readText(value, "threadId", "conversationThreadId"),
-      account: readText(value, "account", "employeeId"),
-      chatTitle: readText(value, "chatTitle", "title"),
-      questionText: questionText || "",
-      answerText: answerText || "",
-      originCode: readText(value, "originCode"),
-      createdAt: readDate(value),
-    });
-  }
-
-  Object.values(value).forEach((child) => {
-    if (Array.isArray(child) || isObject(child)) collectHistory(child, target);
-  });
+function envelopeResults(body: unknown): unknown[] {
+  if (!isObject(body)) return [];
+  const results = readValue(body, ["results"]);
+  return Array.isArray(results) ? results : [];
 }
 
-interface HistoryTurnSource extends HistoryTurn {
-  threadId?: string;
-  account?: string;
-  chatTitle?: string;
-  originCode?: string;
+function envelopeError(body: unknown): string | undefined {
+  if (!isObject(body)) return undefined;
+  const status = readNumber(body, "status");
+  if (status === 1) return undefined;
+  return readText(body, "description", "message") || "操作失敗";
 }
 
 function buildTitle(question: string): string {
-  const value = question.trim() || "歷史對話";
+  const value = question.trim() || "新的對話";
   return value.length <= 24 ? value : `${value.slice(0, 24)}…`;
 }
 
-function groupHistory(items: HistoryTurnSource[]): HistoryRecord[] {
-  const groups = new Map<string, HistoryTurnSource[]>();
+function mapSummary(value: unknown): ConversationSummary | undefined {
+  if (!isObject(value)) return undefined;
+  const conversationId = readText(value, "conversationId");
+  if (!conversationId) return undefined;
+  const lastQuestionText = readText(value, "lastQuestionText") || "";
 
-  items.forEach((item, index) => {
-    const key = item.threadId || item.uniqueId || `legacy-${item.createdAt?.toISOString() || index}`;
-    const group = groups.get(key) || [];
-    group.push(item);
-    groups.set(key, group);
-  });
+  return {
+    conversationId,
+    account: readText(value, "account"),
+    chatTitle: readText(value, "chatTitle") || buildTitle(lastQuestionText),
+    lastQuestionText,
+    lastAnswerText: readText(value, "lastAnswerText") || "",
+    originCode: readText(value, "originCode"),
+    lastMessageAt: readDate(value, "lastMessageAt"),
+    turnCount: readNumber(value, "turnCount"),
+    isDeleted: readBoolean(value, "isDeleted"),
+    deletedAt: readDate(value, "deletedAt"),
+    deletedBy: readText(value, "deletedBy"),
+  };
+}
 
-  return Array.from(groups.entries())
-    .map(([key, group]) => {
-      const turns = [...group].sort(
-        (a, b) => (a.createdAt?.getTime() || 0) - (b.createdAt?.getTime() || 0),
-      );
-      const first = turns[0];
-      const latest = turns[turns.length - 1];
+function mapTurn(value: unknown): HistoryTurn | undefined {
+  if (!isObject(value)) return undefined;
+  const uniqueId = readText(value, "uniqueId");
+  const conversationId = readText(value, "conversationId");
+  if (!uniqueId || !conversationId) return undefined;
 
-      return {
-        uniqueId: key,
-        threadId: first.threadId || key,
-        account: first.account,
-        chatTitle: first.chatTitle || buildTitle(first.questionText),
-        questionText: latest.questionText,
-        answerText: latest.answerText,
-        originCode: first.originCode,
-        createdAt: latest.createdAt,
-        turns: turns.map(({ uniqueId, questionText, answerText, createdAt }) => ({
-          uniqueId,
-          questionText,
-          answerText,
-          createdAt,
-        })),
-      } satisfies HistoryRecord;
-    })
-    .sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0));
+  return {
+    uniqueId,
+    conversationId,
+    questionText: readText(value, "questionText") || "",
+    answerText: readText(value, "answerText") || "",
+    createdAt: readDate(value, "insertDt", "createdAt"),
+    isDeleted: readBoolean(value, "isDeleted"),
+  };
 }
 
 export async function reviseText(request: ReviseRequest): Promise<ReviseResult> {
@@ -194,12 +211,55 @@ export async function reviseText(request: ReviseRequest): Promise<ReviseResult> 
   return { answer: findAnswer(body), status };
 }
 
-export async function getHistoryByAccount(account: string): Promise<HistoryRecord[]> {
-  const { body } = await postJson("/GetHistoryByAccount", {
+export async function getConversationSummaries(
+  account: string,
+  isDeleted: boolean,
+): Promise<ConversationSummary[]> {
+  const { body } = await postJson("/GetConversationSummaries", {
     account,
     originCode: "DDM",
+    isDeleted,
   });
-  const rows: HistoryTurnSource[] = [];
-  collectHistory(body, rows);
-  return groupHistory(rows);
+
+  return envelopeResults(body)
+    .map(mapSummary)
+    .filter((item): item is ConversationSummary => item !== undefined);
+}
+
+export async function getConversationById(
+  account: string,
+  conversationId: string,
+  includeDeleted: boolean,
+): Promise<HistoryTurn[]> {
+  const { body } = await postJson("/GetConversationById", {
+    account,
+    conversationId,
+    originCode: "DDM",
+    includeDeleted,
+  });
+
+  const turns = envelopeResults(body)
+    .map(mapTurn)
+    .filter((item): item is HistoryTurn => item !== undefined);
+
+  if (turns.length === 0) throw new Error(envelopeError(body) || "找不到這個對話。");
+  return turns;
+}
+
+async function mutateConversation(
+  path: "/SoftDeleteConversation" | "/RestoreConversation",
+  account: string,
+  conversationId: string,
+): Promise<void> {
+  const { body } = await postJson(path, { account, conversationId });
+  const error = envelopeError(body);
+  if (error) throw new Error(error);
+}
+
+export function softDeleteConversation(account: string, conversationId: string): Promise<void> {
+  return mutateConversation("/SoftDeleteConversation", account, conversationId);
+}
+
+export function restoreConversation(account: string, conversationId: string): Promise<void> {
+  return mutateConversation("/RestoreConversation", account, conversationId);
 }

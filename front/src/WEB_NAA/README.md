@@ -8,7 +8,7 @@
 
 ## Visual Studio 啟動
 
-請先啟動 API（5210）與 DDM（7079），再以 `http` 設定檔執行 `WEB_NAA`。瀏覽器會開啟 `http://localhost:5124/login`。
+請先啟動 API（5210）與 DDM（7079），再以 `https` 設定檔執行 `WEB_NAA`。瀏覽器會開啟 `https://localhost:5124/login`。
 
 ## 修改 React 前端
 

@@ -5,6 +5,8 @@ namespace API_NAA_DDM.Interfaces;
 
 public interface INaaHttpServices
 {
+    Task<ResponseModel<LoginResponseDto>> AuthenticateUserAsync(LoginRequestDto dto);
+
     /// <summary>
     /// 儲存對話歷史紀錄
     /// </summary>
@@ -13,7 +15,11 @@ public interface INaaHttpServices
     /// <summary>
     /// 依帳號查詢對話歷史紀錄
     /// </summary>
-    Task<ResponseModel<HistoryResponseDto>> GetHistoryByAccountAsync(HistoryQueryDto dto);
+    Task<ResponseModel<ConversationSummaryDto>> GetConversationSummariesAsync(HistoryQueryDto dto);
+
+    Task<ResponseModel<HistoryResponseDto>> GetConversationByIdAsync(HistoryQueryDto dto);
+
+    Task<ResponseModel<AgentContextDto>> GetAgentContextAsync(HistoryQueryDto dto);
 
     /// <summary>
     /// 依帳號查詢員工詳細資料
@@ -33,12 +39,12 @@ public interface INaaHttpServices
     /// <summary>
     /// 刪除指定對話紀錄
     /// </summary>
-    Task<ResponseModel<string>> DeleteHistoryAsync(string uniqueId);
+    Task<ResponseModel<string>> SoftDeleteConversationAsync(ConversationMutationDto dto);
 
     /// <summary>
     /// 封存指定對話紀錄
     /// </summary>
-    Task<ResponseModel<string>> ArchiveHistoryAsync(string uniqueId);
+    Task<ResponseModel<string>> RestoreConversationAsync(ConversationMutationDto dto);
 
     // 連agent builder 新增(純文字)
     Task<string?> GenerateRevisedTextAsync(ReviseRequestDto reviseRequestDto);

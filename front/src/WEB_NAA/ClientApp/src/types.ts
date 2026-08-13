@@ -9,32 +9,35 @@ export interface ChatMessage {
 }
 
 export interface HistoryTurn {
-  uniqueId?: string;
+  uniqueId: string;
+  conversationId: string;
   questionText: string;
   answerText: string;
   createdAt?: Date;
+  isDeleted: boolean;
 }
 
-export interface HistoryRecord {
-  uniqueId: string;
-  threadId: string;
+export interface ConversationSummary {
+  conversationId: string;
   account?: string;
   chatTitle: string;
-  questionText: string;
-  answerText: string;
+  lastQuestionText: string;
+  lastAnswerText: string;
   originCode?: string;
-  createdAt?: Date;
-  turns: HistoryTurn[];
+  lastMessageAt?: Date;
+  turnCount: number;
+  isDeleted: boolean;
+  deletedAt?: Date;
+  deletedBy?: string;
 }
 
 export interface ReviseRequest {
-  threadId: string;
+  conversationId: string;
   chatTitle: string;
   inputText: string;
   account: string;
   employeeId: string;
   originCode: "DDM";
-  agentCode: "Local";
 }
 
 export interface ReviseResult {

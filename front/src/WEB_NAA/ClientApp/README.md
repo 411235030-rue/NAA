@@ -20,7 +20,7 @@ pnpm install
 pnpm dev
 ```
 
-前端網址為 `http://localhost:5124`。Vite 會把 `/ddm` 代理到 `http://localhost:7079`，因此不需要修改 DDM 的 CORS。
+ASP.NET Core 前端網址為 `https://localhost:5124`，並把 `/ddm` 代理到 `https://localhost:7079`，因此不需要修改 DDM 的 CORS。
 
 若 DDM 使用其他網址，複製 `.env.example` 為 `.env.local` 並修改 `DDM_PROXY_TARGET`。
 

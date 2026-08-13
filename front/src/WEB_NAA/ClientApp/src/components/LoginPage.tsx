@@ -63,19 +63,22 @@ const technologyLogos: readonly LogoLoopItem[] = [
 ];
 
 interface LoginPageProps {
-  onLogin: (account: string) => void;
+  onLogin: (account: string, password: string) => Promise<void>;
 }
 
 export function LoginPage({ onLogin }: LoginPageProps) {
   const [account, setAccount] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const value = account.trim();
     if (!value) {
@@ -84,8 +87,23 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       return;
     }
 
+    if (!password) {
+      setError("請輸入密碼");
+      passwordRef.current?.focus();
+      return;
+    }
+
     setError("");
-    onLogin(value);
+    setIsSubmitting(true);
+    try {
+      await onLogin(value, password);
+    } catch (loginError) {
+      setError(loginError instanceof Error ? loginError.message : "登入失敗，請稍後再試。");
+      setPassword("");
+      passwordRef.current?.focus();
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -127,14 +145,34 @@ export function LoginPage({ onLogin }: LoginPageProps) {
             />
           </div>
 
+          <label htmlFor="password">密碼</label>
+          <div className={`login-input ${error ? "login-input--error" : ""}`}>
+            <LockKeyhole size={20} aria-hidden="true" />
+            <input
+              ref={passwordRef}
+              id="password"
+              name="password"
+              type="password"
+              value={password}
+              onChange={(event) => {
+                setPassword(event.target.value);
+                if (error) setError("");
+              }}
+              autoComplete="current-password"
+              placeholder="請輸入密碼"
+              aria-describedby={error ? "account-error" : undefined}
+              aria-invalid={Boolean(error)}
+            />
+          </div>
+
           {error && (
             <div id="account-error" className="login-form__error" role="alert">
               {error}
             </div>
           )}
 
-          <button className="login-button" type="submit">
-            <span>進入系統</span>
+          <button className="login-button" type="submit" disabled={isSubmitting}>
+            <span>{isSubmitting ? "登入中…" : "進入系統"}</span>
             <ArrowRight size={20} aria-hidden="true" />
           </button>
 

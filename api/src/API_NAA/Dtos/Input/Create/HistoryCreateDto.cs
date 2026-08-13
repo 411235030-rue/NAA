@@ -2,7 +2,8 @@ namespace API_NAA.Dtos.Input.Create;
 
 public class HistoryCreateDto
 {
-    public string? ThreadId { get; set; }
+    public string? ConversationId { get; set; }
+    public string? AgentThreadId { get; set; }
     public string Account { get; set; } = null!;
     public string QuestionText { get; set; } = null!;
     public string AnswerText { get; set; } = null!;

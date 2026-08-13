@@ -9,7 +9,7 @@ The front end communicates only with DDM. DDM is responsible for all communicati
 ## Run
 
 ```powershell
-dotnet run --project .\src\WEB_NAA\WEB_NAA.csproj --launch-profile http
+dotnet run --project .\src\WEB_NAA\WEB_NAA.csproj --launch-profile https
 ```
 
-Default URL: `http://localhost:5124`
+Default URL: `https://localhost:5124`

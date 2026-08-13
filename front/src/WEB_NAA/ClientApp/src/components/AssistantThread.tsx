@@ -315,10 +315,10 @@ export function AssistantThread({ account }: AssistantThreadProps) {
             <ThinkingMessage />
           </div>
         </div>
-        <ThreadPrimitive.ViewportFooter className="thread__footer">
-          <Composer />
-        </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
+      <div className="thread__footer">
+        <Composer />
+      </div>
     </ThreadPrimitive.Root>
   );
 }

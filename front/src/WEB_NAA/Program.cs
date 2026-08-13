@@ -1,53 +1,170 @@
-using System.Net.Http.Headers;
+using System.Security.Claims;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
 
 var ddmBaseUrl = builder.Configuration["Ddm:BaseUrl"]
     ?? Environment.GetEnvironmentVariable("DDM_BASE_URL")
-    ?? "http://localhost:7079";
+    ?? "https://localhost:7079";
 
 if (!Uri.TryCreate(ddmBaseUrl, UriKind.Absolute, out var ddmBaseUri))
     throw new InvalidOperationException($"Ddm:BaseUrl 不是有效網址：{ddmBaseUrl}");
+
+if (ddmBaseUri.Scheme != Uri.UriSchemeHttps)
+    throw new InvalidOperationException("DDM must use HTTPS.");
+
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+});
 
 builder.Services.AddHttpClient("DDM", client =>
 {
     client.BaseAddress = ddmBaseUri;
     client.Timeout = TimeSpan.FromSeconds(20);
 });
+builder.Services
+    .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.Cookie.Name = "NAA.Session";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        options.Cookie.SameSite = SameSiteMode.Strict;
+        options.ExpireTimeSpan = TimeSpan.FromHours(8);
+        options.SlidingExpiration = true;
+        options.Events.OnRedirectToLogin = context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return Task.CompletedTask;
+        };
+        options.Events.OnRedirectToAccessDenied = context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return Task.CompletedTask;
+        };
+    });
+builder.Services.AddAuthorization();
 
 var app = builder.Build();
+
+app.UseForwardedHeaders();
 
 if (!app.Environment.IsDevelopment())
 {
     app.UseHsts();
-    app.UseHttpsRedirection();
 }
+
+app.UseHttpsRedirection();
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapPost("/auth/login", async (
+    LoginRequest request,
+    HttpContext context,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken cancellationToken) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Account) || string.IsNullOrEmpty(request.Password))
+        return Results.BadRequest(new { message = "請輸入帳號與密碼。" });
+
+    try
+    {
+        var client = httpClientFactory.CreateClient("DDM");
+        using var response = await client.PostAsJsonAsync("Login", request, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+            return Results.Json(new { message = "登入服務暫時無法使用。" }, statusCode: StatusCodes.Status502BadGateway);
+
+        var loginResult = JsonSerializer.Deserialize<LoginEnvelope>(body, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        });
+        var account = loginResult?.Results.FirstOrDefault()?.Account?.Trim();
+
+        if (loginResult?.Status != 1 || string.IsNullOrWhiteSpace(account))
+        {
+            return Results.Json(
+                new { message = loginResult?.Description ?? "帳號或密碼錯誤。" },
+                statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var identity = new ClaimsIdentity(
+            new[] { new Claim(ClaimTypes.Name, account) },
+            CookieAuthenticationDefaults.AuthenticationScheme);
+        await context.SignInAsync(
+            CookieAuthenticationDefaults.AuthenticationScheme,
+            new ClaimsPrincipal(identity),
+            new AuthenticationProperties
+            {
+                IsPersistent = false,
+                ExpiresUtc = DateTimeOffset.UtcNow.AddHours(8)
+            });
+
+        return Results.Ok(new { account });
+    }
+    catch (HttpRequestException)
+    {
+        return Results.Json(
+            new { message = "無法連線到登入服務，請確認 API 與 DDM 已啟動。" },
+            statusCode: StatusCodes.Status502BadGateway);
+    }
+});
+
+app.MapGet("/auth/session", (ClaimsPrincipal user) =>
+    Results.Ok(new { account = user.Identity!.Name }))
+    .RequireAuthorization();
+
+app.MapPost("/auth/logout", async (HttpContext context) =>
+{
+    await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.NoContent();
+})
+.RequireAuthorization();
 
 app.MapPost("/ddm/{endpoint}", async (
     string endpoint,
     HttpRequest incomingRequest,
+    ClaimsPrincipal user,
     IHttpClientFactory httpClientFactory,
     CancellationToken cancellationToken) =>
 {
-    if (endpoint is not ("ReviseText" or "GetHistoryByAccount"))
+    if (endpoint is not (
+        "ReviseText" or
+        "GetConversationSummaries" or
+        "GetConversationById" or
+        "SoftDeleteConversation" or
+        "RestoreConversation"))
         return Results.NotFound();
 
     try
     {
+        var account = user.Identity?.Name;
+        if (string.IsNullOrWhiteSpace(account))
+            return Results.Unauthorized();
+
+        using var reader = new StreamReader(incomingRequest.Body, Encoding.UTF8);
+        var incomingBody = await reader.ReadToEndAsync(cancellationToken);
+        var payload = JsonNode.Parse(incomingBody) as JsonObject;
+        if (payload is null)
+            return Results.BadRequest(new { message = "請求格式錯誤。" });
+
+        payload["account"] = account;
+        if (payload.ContainsKey("employeeId")) payload["employeeId"] = account;
+
         using var outgoingRequest = new HttpRequestMessage(HttpMethod.Post, endpoint)
         {
-            Content = new StreamContent(incomingRequest.Body)
+            Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
         };
-
-        if (!string.IsNullOrWhiteSpace(incomingRequest.ContentType))
-        {
-            outgoingRequest.Content.Headers.ContentType =
-                MediaTypeHeaderValue.Parse(incomingRequest.ContentType);
-        }
 
         var client = httpClientFactory.CreateClient("DDM");
         using var response = await client.SendAsync(outgoingRequest, cancellationToken);
@@ -80,8 +197,23 @@ app.MapPost("/ddm/{endpoint}", async (
             detail: exception.Message,
             statusCode: StatusCodes.Status502BadGateway);
     }
-});
+})
+.RequireAuthorization();
 
 app.MapFallbackToFile("index.html");
 
 app.Run();
+
+sealed record LoginRequest(string Account, string Password);
+
+sealed class LoginEnvelope
+{
+    public int Status { get; set; }
+    public string? Description { get; set; }
+    public List<LoginAccount> Results { get; set; } = [];
+}
+
+sealed class LoginAccount
+{
+    public string? Account { get; set; }
+}

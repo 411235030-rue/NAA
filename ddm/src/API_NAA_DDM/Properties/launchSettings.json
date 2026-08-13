@@ -1,14 +1,14 @@
 {
   "profiles": {
-    "http": {
+    "https": {
       "commandName": "Project",
       "launchBrowser": true,
       "launchUrl": "healthz",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
-        "NAA_SERVICE_DOMAIN": "http://localhost:5210"
+        "NAA_SERVICE_DOMAIN": "https://localhost:5210"
       },
-      "applicationUrl": "http://localhost:7079"
+      "applicationUrl": "https://localhost:7079"
     }
   }
 }

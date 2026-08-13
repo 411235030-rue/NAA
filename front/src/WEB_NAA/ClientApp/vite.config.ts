@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, ".", "");
-  const ddmTarget = env.DDM_PROXY_TARGET || "http://localhost:7079";
+  const ddmTarget = env.DDM_PROXY_TARGET || "https://localhost:7079";
 
   return {
     plugins: [react()],

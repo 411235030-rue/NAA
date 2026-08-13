@@ -1,4 +1,4 @@
-using API_NAA_DDM.Configs;
+using API_NAA_DDM.Constants;
 using API_NAA_DDM.Dtos;
 using API_NAA_DDM.Interfaces;
 using ResponseModel;
@@ -10,12 +10,22 @@ namespace API_NAA_DDM.Services;
 public class NaaHttpServices : INaaHttpServices
 {
     private readonly HttpClient _client;
+    private readonly IAgentService _agentService;
     private readonly ILogger<NaaHttpServices> _logger;
 
-    public NaaHttpServices(HttpClient client, ILogger<NaaHttpServices> logger)
+    public NaaHttpServices(
+        HttpClient client,
+        IAgentService agentService,
+        ILogger<NaaHttpServices> logger)
     {
         _client = client;
+        _agentService = agentService;
         _logger = logger;
+    }
+
+    public Task<ResponseModel<LoginResponseDto>> AuthenticateUserAsync(LoginRequestDto dto)
+    {
+        return PostToNaaAsync<LoginRequestDto, LoginResponseDto>("/AuthenticateUser", dto);
     }
 
     public Task<ResponseModel<HistoryResponseDto>> SaveHistoryAsync(HistoryCreateDto dto)
@@ -23,9 +33,29 @@ public class NaaHttpServices : INaaHttpServices
         return PostToNaaAsync<HistoryCreateDto, HistoryResponseDto>("/SaveHistory", dto);
     }
 
-    public Task<ResponseModel<HistoryResponseDto>> GetHistoryByAccountAsync(HistoryQueryDto dto)
+    public Task<ResponseModel<ConversationSummaryDto>> GetConversationSummariesAsync(HistoryQueryDto dto)
     {
-        return PostToNaaAsync<HistoryQueryDto, HistoryResponseDto>("/GetHistoryByAccount", dto);
+        return PostToNaaAsync<HistoryQueryDto, ConversationSummaryDto>("/GetConversationSummaries", dto);
+    }
+
+    public Task<ResponseModel<HistoryResponseDto>> GetConversationByIdAsync(HistoryQueryDto dto)
+    {
+        return PostToNaaAsync<HistoryQueryDto, HistoryResponseDto>("/GetConversationById", dto);
+    }
+
+    public Task<ResponseModel<AgentContextDto>> GetAgentContextAsync(HistoryQueryDto dto)
+    {
+        return PostToNaaAsync<HistoryQueryDto, AgentContextDto>("/GetAgentContext", dto);
+    }
+
+    public Task<ResponseModel<string>> SoftDeleteConversationAsync(ConversationMutationDto dto)
+    {
+        return PostToNaaAsync<ConversationMutationDto, string>("/SoftDeleteConversation", dto);
+    }
+
+    public Task<ResponseModel<string>> RestoreConversationAsync(ConversationMutationDto dto)
+    {
+        return PostToNaaAsync<ConversationMutationDto, string>("/RestoreConversation", dto);
     }
 
     public Task<ResponseModel<UserQueryResponseDto>> GetUserByAccountAsync(UserQueryDto dto)
@@ -43,61 +73,119 @@ public class NaaHttpServices : INaaHttpServices
         return Task.FromResult(LocalUserResponse(dto.Account, "Local user created"));
     }
 
-    public Task<ResponseModel<string>> DeleteHistoryAsync(string uniqueId)
-    {
-        return Task.FromResult(new[] { uniqueId }.ToResponse("History deleted locally", "No history id supplied"));
-    }
-
-    public Task<ResponseModel<string>> ArchiveHistoryAsync(string uniqueId)
-    {
-        return Task.FromResult(new[] { uniqueId }.ToResponse("History archived locally", "No history id supplied"));
-    }
-
     public async Task<string?> GenerateRevisedTextAsync(ReviseRequestDto reviseRequestDto)
     {
-        var revisedText = BuildLocalRevisedText(reviseRequestDto.InputText);
-
         if (string.IsNullOrWhiteSpace(reviseRequestDto.Account) ||
-            string.IsNullOrWhiteSpace(reviseRequestDto.InputText))
+            string.IsNullOrWhiteSpace(reviseRequestDto.InputText) ||
+            string.IsNullOrWhiteSpace(reviseRequestDto.ConversationId))
         {
-            return revisedText;
+            return null;
         }
 
-        var historyDto = new HistoryCreateDto
+        var contextResult = await GetAgentContextAsync(new HistoryQueryDto
         {
-            ThreadId = reviseRequestDto.ThreadId,
             Account = reviseRequestDto.Account,
-            QuestionText = reviseRequestDto.InputText,
-            AnswerText = revisedText,
-            ChatTitle = string.IsNullOrWhiteSpace(reviseRequestDto.ChatTitle)
-                ? reviseRequestDto.InputText
-                : reviseRequestDto.ChatTitle,
-            OriginCode = reviseRequestDto.OriginCode,
-            EmployeeId = reviseRequestDto.EmployeeId
-        };
+            ConversationId = reviseRequestDto.ConversationId,
+            OriginCode = reviseRequestDto.OriginCode
+        });
+
+        if (contextResult.Status != 1 && contextResult.Description != DbConstant.QueryNoData)
+            throw new AgentServiceException("無法取得 Agent 對話狀態，已停止送出以避免建立錯誤的新對話。");
+
+        var existingAgentThreadId = contextResult.Results.FirstOrDefault()?.AgentThreadId;
+        AgentMessageResponse agentResult;
 
         try
         {
-            await _client.PostAsJsonAsync($"{NaaConfig.NaaServiceDomain}/SaveHistory", historyDto);
+            agentResult = await _agentService.GenerateResponseAsync(new AgentMessageRequest(
+                reviseRequestDto.InputText,
+                reviseRequestDto.Account,
+                existingAgentThreadId));
         }
-        catch (Exception ex)
+        catch (AgentServiceException ex)
         {
-            _logger.LogWarning(ex, "Local revision succeeded, but history could not be saved.");
+            var failureAnswer = $"系統暫時無法取得回答：{ex.Message}";
+            var failureSaveResult = await SaveHistoryAsync(CreateHistoryDto(
+                reviseRequestDto,
+                failureAnswer,
+                existingAgentThreadId));
+
+            if (failureSaveResult.Status != 1)
+            {
+                _logger.LogWarning(
+                    "Agent request and conversation history save both failed: {Description}",
+                    failureSaveResult.Description);
+                throw new AgentServiceException(
+                    $"{ex.Message}；這次問題的歷史紀錄也未能儲存：{failureSaveResult.Description}");
+            }
+
+            throw;
+        }
+
+        var revisedText = agentResult.Answer;
+
+        if (string.IsNullOrWhiteSpace(revisedText))
+        {
+            const string failureAnswer = "系統暫時沒有回傳回答內容。";
+            var failureSaveResult = await SaveHistoryAsync(CreateHistoryDto(
+                reviseRequestDto,
+                failureAnswer,
+                agentResult.AgentThreadId ?? existingAgentThreadId));
+
+            if (failureSaveResult.Status != 1)
+            {
+                throw new AgentServiceException(
+                    $"Agent 沒有回傳回答，且歷史紀錄儲存失敗：{failureSaveResult.Description}");
+            }
+
+            throw new AgentServiceException(failureAnswer);
+        }
+
+        var saveResult = await SaveHistoryAsync(CreateHistoryDto(
+            reviseRequestDto,
+            revisedText,
+            agentResult.AgentThreadId ?? existingAgentThreadId));
+        if (saveResult.Status != 1)
+        {
+            _logger.LogWarning(
+                "Agent response was generated, but conversation history was not saved: {Description}",
+                saveResult.Description);
+            throw new AgentServiceException(
+                $"Agent 已回覆，但歷史紀錄儲存失敗：{saveResult.Description}");
         }
 
         return revisedText;
     }
 
-    private async Task<ResponseModel<TResponse>> PostToNaaAsync<TRequest, TResponse>(string path, TRequest dto)
+    private static HistoryCreateDto CreateHistoryDto(
+        ReviseRequestDto request,
+        string answerText,
+        string? agentThreadId)
+    {
+        return new HistoryCreateDto
+        {
+            ConversationId = request.ConversationId,
+            AgentThreadId = agentThreadId,
+            Account = request.Account!,
+            QuestionText = request.InputText!,
+            AnswerText = answerText,
+            // Each conversation row represents one turn. Store that turn's
+            // question as its title instead of repeating the first turn title.
+            ChatTitle = request.InputText,
+            OriginCode = request.OriginCode
+        };
+    }
+
+    private async Task<ResponseModel<TResponse>> PostToNaaAsync<TRequest, TResponse>(
+        string path,
+        TRequest dto)
     {
         try
         {
-            var response = await _client.PostAsJsonAsync($"{NaaConfig.NaaServiceDomain}{path}", dto);
+            using var response = await _client.PostAsJsonAsync(path, dto);
 
             if (!response.IsSuccessStatusCode)
-            {
                 return GenerateErrorResponse<TResponse>($"NAA API returned {response.StatusCode}");
-            }
 
             var result = await response.Content.ReadFromJsonAsync<ResponseModel<TResponse>>(
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
@@ -107,7 +195,7 @@ public class NaaHttpServices : INaaHttpServices
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "NAA API call failed: {Path}", path);
-            return GenerateErrorResponse<TResponse>(ex.Message);
+            return GenerateErrorResponse<TResponse>("NAA API request failed");
         }
     }
 
@@ -122,16 +210,5 @@ public class NaaHttpServices : INaaHttpServices
         };
 
         return new[] { user }.ToResponse(description, "No local user data");
-    }
-
-    private static string BuildLocalRevisedText(string? input)
-    {
-        if (string.IsNullOrWhiteSpace(input))
-        {
-            return "請輸入要修正的文字。";
-        }
-
-        var normalized = input.Trim();
-        return $"本機示範修正版：{normalized}";
     }
 }

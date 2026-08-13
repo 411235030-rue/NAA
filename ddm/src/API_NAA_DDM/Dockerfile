@@ -1,18 +1,25 @@
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
 USER $APP_UID
 WORKDIR /app
 EXPOSE 8080
 EXPOSE 8081
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 ARG BUILD_CONFIGURATION=Release
-ARG SOURCE_URL
-ARG REPO_USER
-ARG REPO_POSSWD
 WORKDIR /src
 COPY ["src/API_NAA_DDM/API_NAA_DDM.csproj", "src/API_NAA_DDM/"]
-RUN dotnet nuget add source $SOURCE_URL --name nuget-repo --username $REPO_USER --password $REPO_POSSWD --store-password-in-clear-text
-RUN dotnet restore "./src/API_NAA_DDM/API_NAA_DDM.csproj"
+
+RUN --mount=type=secret,id=source_url \
+    --mount=type=secret,id=source_cred \
+    source_url=$(cat /run/secrets/source_url) && \
+    source_userpass=$(cat /run/secrets/source_cred) && \
+    dotnet nuget add source "$source_url" \
+      --name nuget-repo \
+      --username "${source_userpass%%:*}" \
+      --password "${source_userpass#*:}" \
+      --store-password-in-clear-text && \
+    dotnet restore "./src/API_NAA_DDM/API_NAA_DDM.csproj" && \
+    dotnet nuget remove source nuget-repo
 COPY . .
 WORKDIR "/src/src/API_NAA_DDM"
 RUN dotnet build "./API_NAA_DDM.csproj" -c $BUILD_CONFIGURATION -o /app/build
